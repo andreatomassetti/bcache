@@ -341,6 +341,9 @@ void bch_write_bdev_super(struct cached_dev *dc, struct closure *parent)
 	struct closure *cl = &dc->sb_write;
 	struct bio *bio = &dc->sb_bio;
 
+	if (!dc->sb_disk)
+		return;
+
 	down(&dc->sb_write_mutex);
 	closure_init(cl, parent);
 
@@ -1097,7 +1100,7 @@ int bch_cached_dev_run(struct cached_dev *dc)
 		goto out;
 	}
 
-	if (!d->c && dc->sb_disk &&
+	if (!d->c &&
 	    BDEV_STATE(&dc->sb) != BDEV_STATE_NONE) {
 		struct closure cl;
 
@@ -1291,6 +1294,9 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c,
 	 */
 
 	if (bch_is_zero(u->uuid, 16)) {
+		struct closure cl;
+
+		closure_init_stack(&cl);
 
 		memcpy(u->uuid, dc->sb.uuid, 16);
 		memcpy(u->label, dc->sb.label, SB_LABEL_SIZE);
@@ -1300,14 +1306,8 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c,
 		memcpy(dc->sb.set_uuid, c->set_uuid, 16);
 		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
 
-		if (dc->sb_disk) {
-			struct closure cl;
-
-			closure_init_stack(&cl);
-			bch_write_bdev_super(dc, &cl);
-			closure_sync(&cl);
-		}
-
+		bch_write_bdev_super(dc, &cl);
+		closure_sync(&cl);
 	} else {
 		u->last_reg = rtime;
 		bch_uuid_write(c);
