@@ -52,4 +52,8 @@ void bch_flash_dev_request_init(struct bcache_device *d);
 
 extern struct kmem_cache *bch_search_cache;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+	#define BIO_MAX_VECS		256U
+#endif
+
 #endif /* _BCACHE_REQUEST_H_ */
