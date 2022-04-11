@@ -933,7 +933,11 @@ static inline void closure_bio_submit(struct cache_set *c,
 		bio_endio(bio);
 		return;
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+	generic_make_request(bio);
+#else
 	submit_bio_noacct(bio);
+#endif
 }
 
 /*

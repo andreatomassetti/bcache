@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/cdev.h>
 #include <linux/fs.h>
+#include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 
 #include "control.h"

@@ -670,7 +670,14 @@ static void bio_complete(struct search *s)
 {
 	if (s->orig_bio) {
 		/* Count on bcache device */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+		generic_end_io_acct(s->d->disk->queue, bio_op(s->orig_bio),
+				    &s->d->disk->part0, s->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+		bio_end_io_acct(s->orig_bio, s->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+		disk_end_io_acct(s->d->disk, bio_op(s->orig_bio), s->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 		part_end_io_acct(s->orig_bdev, s->orig_bio, s->start_time);
 #else
 		bio_end_io_acct_remapped(s->orig_bio, s->start_time,
@@ -742,7 +749,13 @@ static inline struct search *search_alloc(struct bio *bio,
 	s->write		= op_is_write(bio_op(bio));
 	s->read_dirty_data	= 0;
 	/* Count on the bcache device */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+	s->start_time		= jiffies;
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+	s->start_time		= bio_start_io_acct(bio);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+	s->start_time		= disk_start_io_acct(d->disk, bio_sectors(bio), bio_op(bio));
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	s->start_time		= part_start_io_acct(d->disk, &s->orig_bdev, bio);
 #else
 	s->orig_bdev		= orig_bdev;
@@ -1095,7 +1108,14 @@ static void detached_dev_end_io(struct bio *bio)
 	bio->bi_private = ddip->bi_private;
 
 	/* Count on the bcache device */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+	generic_end_io_acct(ddip->d->disk->queue, bio_op(bio),
+			&ddip->d->disk->part0, ddip->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+	bio_end_io_acct(bio, ddip->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+	disk_end_io_acct(ddip->d->disk, bio_op(bio), ddip->start_time);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	part_end_io_acct(ddip->orig_bdev, bio, ddip->start_time);
 #else
 	bio_end_io_acct_remapped(bio, ddip->start_time, ddip->orig_bdev);
@@ -1130,7 +1150,13 @@ static void detached_dev_do_request(struct bcache_device *d, struct bio *bio,
 	ddip = kzalloc(sizeof(struct detached_dev_io_private), GFP_NOIO);
 	ddip->d = d;
 	/* Count on the bcache device */
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
+	ddip->start_time = jiffies;
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+	ddip->start_time = bio_start_io_acct(bio);
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+	ddip->start_time = disk_start_io_acct(d->disk, bio_sectors(bio), bio_op(bio));
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 	ddip->start_time = part_start_io_acct(d->disk, &ddip->orig_bdev, bio);
 #else
 	ddip->orig_bdev = orig_bdev;
@@ -1145,7 +1171,11 @@ static void detached_dev_do_request(struct bcache_device *d, struct bio *bio,
 	    !blk_queue_discard(bdev_get_queue(dc->bdev)))
 		bio->bi_end_io(bio);
 	else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+		generic_make_request(bio);
+#else
 		submit_bio_noacct(bio);
+#endif
 }
 
 static void quit_max_writeback_rate(struct cache_set *c,
@@ -1201,9 +1231,9 @@ cached_dev_submit_bio(struct bio *bio)
 #else
 	struct block_device *orig_bdev = bio->bi_bdev;
 	struct bcache_device *d = orig_bdev->bd_disk->private_data;
+	unsigned long start_time;
 #endif
 	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
-	unsigned long start_time;
 	int rw = bio_data_dir(bio);
 
 	if (unlikely((d->c && test_bit(CACHE_SET_IO_DISABLE, &d->c->flags)) ||
@@ -1232,8 +1262,6 @@ cached_dev_submit_bio(struct bio *bio)
 		}
 	}
 
-	start_time = bio_start_io_acct(bio);
-
 	bio_set_dev(bio, dc->bdev);
 	bio->bi_iter.bi_sector += dc->sb.data_offset;
 
@@ -1241,6 +1269,7 @@ cached_dev_submit_bio(struct bio *bio)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 		s = search_alloc(bio, d);
 #else
+		start_time = bio_start_io_acct(bio);
 		s = search_alloc(bio, d, orig_bdev, start_time);
 #endif
 		trace_bcache_request_start(s->d, bio);

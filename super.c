@@ -767,7 +767,9 @@ static int ioctl_dev(struct block_device *b, fmode_t mode,
 }
 
 static const struct block_device_operations bcache_cached_ops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 	.submit_bio	= cached_dev_submit_bio,
+#endif
 	.open		= open_dev,
 	.release	= release_dev,
 	.ioctl		= ioctl_dev,
@@ -775,7 +777,9 @@ static const struct block_device_operations bcache_cached_ops = {
 };
 
 static const struct block_device_operations bcache_flash_ops = {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 	.submit_bio	= flash_dev_submit_bio,
+#endif
 	.open		= open_dev,
 	.release	= release_dev,
 	.ioctl		= ioctl_dev,
@@ -1033,7 +1037,7 @@ static void calc_cached_dev_sectors(struct cache_set *c)
 	struct cached_dev *dc;
 
 	list_for_each_entry(dc, &c->cached_devs, list)
-		sectors += bdev_nr_sectors(dc->bdev);
+		sectors += bdev_sectors(dc->bdev);
 
 	c->cached_dev_sectors = sectors;
 }
@@ -1463,7 +1467,7 @@ static int cached_dev_init(struct cached_dev *dc, unsigned int block_size)
 			q->limits.raid_partial_stripes_expensive;
 
 	ret = bcache_device_init(&dc->disk, block_size,
-			 bdev_nr_sectors(dc->bdev) - dc->sb.data_offset,
+			 bdev_sectors(dc->bdev) - dc->sb.data_offset,
 			 dc->bdev, &bcache_cached_ops);
 	if (ret)
 		return ret;
@@ -1501,7 +1505,12 @@ static int register_bdev(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 		goto err;
 
 	err = "error creating kobject";
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+	if (kobject_add(&dc->disk.kobj, &part_to_dev(bdev->bd_part)->kobj,
+			"bcache"))
+#else
 	if (kobject_add(&dc->disk.kobj, bdev_kobj(bdev), "bcache"))
+#endif
 		goto err;
 	if (bch_cache_accounting_add_kobjs(&dc->accounting, &dc->disk.kobj))
 		goto err;
@@ -2413,7 +2422,12 @@ static int register_cache(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 		goto err;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+	if (kobject_add(&ca->kobj, &part_to_dev(bdev->bd_part)->kobj,
+			"bcache")) {
+#else
 	if (kobject_add(&ca->kobj, bdev_kobj(bdev), "bcache")) {
+#endif
 		err = "error calling kobject_add";
 		ret = -ENOMEM;
 		goto out;
@@ -2612,7 +2626,11 @@ static ssize_t register_bcache_common(void *k, struct kobj_attribute *attr,
 			dev_t dev;
 
 			mutex_lock(&bch_register_lock);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+			if (lookup_bdev(strim(path)) &&
+#else
 			if (lookup_bdev(strim(path), &dev) == 0 &&
+#endif
 			    bch_is_open(dev))
 				err = "device already registered";
 			else
