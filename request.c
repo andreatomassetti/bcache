@@ -1261,6 +1261,9 @@ cached_dev_submit_bio(struct bio *bio)
 			quit_max_writeback_rate(d->c, dc);
 		}
 	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+	start_time = bio_start_io_acct(bio);
+#endif
 
 	bio_set_dev(bio, dc->bdev);
 	bio->bi_iter.bi_sector += dc->sb.data_offset;
@@ -1269,7 +1272,6 @@ cached_dev_submit_bio(struct bio *bio)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
 		s = search_alloc(bio, d);
 #else
-		start_time = bio_start_io_acct(bio);
 		s = search_alloc(bio, d, orig_bdev, start_time);
 #endif
 		trace_bcache_request_start(s->d, bio);

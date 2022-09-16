@@ -893,12 +893,14 @@ static void bcache_device_free(struct bcache_device *d)
 		bcache_device_detach(d);
 
 	if (disk) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
 		bool disk_added = (disk->flags & GENHD_FL_UP) != 0;
 
 		if (disk_added)
 			del_gendisk(disk);
 
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0)
 		if (disk->queue)
 			blk_cleanup_queue(disk->queue);
 #endif
@@ -1115,7 +1117,7 @@ int bch_cached_dev_run(struct cached_dev *dc)
 		closure_sync(&cl);
 	}
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
 	add_disk(d->disk);
 #else
 	ret = add_disk(d->disk);
@@ -1591,7 +1593,7 @@ static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 	bcache_device_attach(d, c, u - c->uuids);
 	bch_sectors_dirty_init(d);
 	bch_flash_dev_request_init(d);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
 	add_disk(d->disk);
 #else
 	err = add_disk(d->disk);
