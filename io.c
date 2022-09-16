@@ -26,7 +26,12 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 	struct bbio *b = mempool_alloc(&c->bio_meta, GFP_NOIO);
 	struct bio *bio = &b->bio;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(bio, bio->bi_inline_vecs, meta_bucket_pages(&c->cache->sb));
+#else
+	bio_init(bio, NULL, bio->bi_inline_vecs,
+		 meta_bucket_pages(&c->cache->sb), 0);
+#endif
 
 	return bio;
 }

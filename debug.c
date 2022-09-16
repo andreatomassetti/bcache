@@ -111,11 +111,20 @@ void bch_data_verify(struct cached_dev *dc, struct bio *bio)
 	struct bio_vec bv, cbv;
 	struct bvec_iter iter, citer = { 0 };
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	check = bio_kmalloc(GFP_NOIO, bio_segments(bio));
+#else
+	check = bio_kmalloc(bio_segments(bio), GFP_NOIO);
+#endif
 	if (!check)
 		return;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	bio_set_dev(check, bio->bi_bdev);
 	check->bi_opf = REQ_OP_READ;
+#else
+	bio_init(check, bio->bi_bdev, check->bi_inline_vecs, nr_segs,
+		 REQ_OP_READ);
+#endif
 	check->bi_iter.bi_sector = bio->bi_iter.bi_sector;
 	check->bi_iter.bi_size = bio->bi_iter.bi_size;
 
@@ -146,7 +155,12 @@ void bch_data_verify(struct cached_dev *dc, struct bio *bio)
 
 	bio_free_pages(check);
 out_put:
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	bio_put(check);
+#else
+	bio_uninit(check);
+	kfree(check);
+#endif
 }
 
 #endif

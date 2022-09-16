@@ -19,7 +19,9 @@
 #include <linux/blkdev.h>
 #include <linux/pagemap.h>
 #include <linux/debugfs.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 #include <linux/genhd.h>
+#endif
 #include <linux/idr.h>
 #include <linux/kthread.h>
 #include <linux/workqueue.h>
@@ -347,8 +349,12 @@ void bch_write_bdev_super(struct cached_dev *dc, struct closure *parent)
 	down(&dc->sb_write_mutex);
 	closure_init(cl, parent);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(bio, dc->sb_bv, 1);
 	bio_set_dev(bio, dc->bdev);
+#else
+	bio_init(bio, dc->bdev, dc->sb_bv, 1, 0);
+#endif
 	bio->bi_end_io	= write_bdev_super_endio;
 	bio->bi_private = dc;
 
@@ -390,9 +396,12 @@ void bcache_write_super(struct cache_set *c)
 
 	if (ca->sb.version < version)
 		ca->sb.version = version;
-
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(bio, ca->sb_bv, 1);
 	bio_set_dev(bio, ca->bdev);
+#else
+	bio_init(bio, ca->bdev, ca->sb_bv, 1, 0);
+#endif
 	bio->bi_end_io	= write_super_endio;
 	bio->bi_private = ca;
 
@@ -909,8 +918,10 @@ static void bcache_device_free(struct bcache_device *d)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 14, 0)
 		if (disk_added)
 			put_disk(disk);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 		blk_cleanup_disk(disk);
+#else
+		put_disk(disk);
 #endif
 	}
 
@@ -1013,7 +1024,9 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, d->disk->queue);
 	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, d->disk->queue);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	blk_queue_flag_set(QUEUE_FLAG_DISCARD, d->disk->queue);
+#endif
 
 	blk_queue_write_cache(q, true, true);
 
@@ -1039,7 +1052,7 @@ static void calc_cached_dev_sectors(struct cache_set *c)
 	struct cached_dev *dc;
 
 	list_for_each_entry(dc, &c->cached_devs, list)
-		sectors += bdev_sectors(dc->bdev);
+		sectors += BDEV_SECTORS(dc->bdev);
 
 	c->cached_dev_sectors = sectors;
 }
@@ -1469,7 +1482,7 @@ static int cached_dev_init(struct cached_dev *dc, unsigned int block_size)
 			q->limits.raid_partial_stripes_expensive;
 
 	ret = bcache_device_init(&dc->disk, block_size,
-			 bdev_sectors(dc->bdev) - dc->sb.data_offset,
+			 BDEV_SECTORS(dc->bdev) - dc->sb.data_offset,
 			 dc->bdev, &bcache_cached_ops);
 	if (ret)
 		return ret;
@@ -2181,6 +2194,7 @@ static int run_cache_set(struct cache_set *c)
 
 	flash_devs_run(c);
 
+	bch_journal_space_reserve(&c->journal);
 	set_bit(CACHE_SET_RUNNING, &c->flags);
 	return 0;
 err:
@@ -2290,7 +2304,11 @@ static int cache_alloc(struct cache *ca)
 	__module_get(THIS_MODULE);
 	kobject_init(&ca->kobj, &bch_cache_ktype);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(&ca->journal.bio, ca->journal.bio.bi_inline_vecs, 8);
+#else
+	bio_init(&ca->journal.bio, NULL, ca->journal.bio.bi_inline_vecs, 8, 0);
+#endif
 
 	/*
 	 * when ca->sb.njournal_buckets is not zero, journal exists,
@@ -2403,7 +2421,11 @@ static int register_cache(struct cache_sb *sb, struct cache_sb_disk *sb_disk,
 	ca->bdev->bd_holder = ca;
 	ca->sb_disk = sb_disk;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	if (blk_queue_discard(bdev_get_queue(bdev)))
+#else
+	if (bdev_max_discard_sectors((bdev)))
+#endif
 		ca->discard = CACHE_DISCARD(&ca->sb);
 
 	ret = cache_alloc(ca);

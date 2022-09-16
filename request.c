@@ -44,10 +44,18 @@ static void bio_csum(struct bio *bio, struct bkey *k)
 	uint64_t csum = 0;
 
 	bio_for_each_segment(bv, bio, iter) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 		void *d = kmap(bv.bv_page) + bv.bv_offset;
+#else
+		void *d = bvec_kmap_local(&bv);
+#endif
 
 		csum = crc64_be(csum, d, bv.bv_len);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 		kunmap(bv.bv_page);
+#else
+		kunmap_local(d);
+#endif
 	}
 
 	k->ptr[KEY_PTRS(k)] = csum & (~0ULL >> 1);
@@ -696,8 +704,12 @@ static void do_bio_hook(struct search *s,
 {
 	struct bio *bio = &s->bio.bio;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(bio, NULL, 0);
 	__bio_clone_fast(bio, orig_bio);
+#else
+	bio_init_clone(orig_bio->bi_bdev, bio, orig_bio, GFP_NOIO);
+#endif
 	/*
 	 * bi_end_io can be set separately somewhere else, e.g. the
 	 * variants in,
@@ -857,11 +869,20 @@ static void cached_dev_read_done(struct closure *cl)
 	 */
 
 	if (s->iop.bio) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 		bio_reset(s->iop.bio);
+#else
+		bio_reset(s->iop.bio, s->cache_miss->bi_bdev, REQ_OP_READ);
+#endif
 		s->iop.bio->bi_iter.bi_sector =
 			s->cache_miss->bi_iter.bi_sector;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 		bio_copy_dev(s->iop.bio, s->cache_miss);
+#endif
 		s->iop.bio->bi_iter.bi_size = s->insert_bio_sectors << 9;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
+		bio_clone_blkg_association(s->iop.bio, s->cache_miss);
+#endif
 		bch_bio_map(s->iop.bio, NULL);
 
 		bio_copy_data(s->cache_miss, s->iop.bio);
@@ -939,14 +960,22 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	/* btree_search_recurse()'s btree iterator is no good anymore */
 	ret = miss == bio ? MAP_DONE : -EINTR;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	cache_bio = bio_alloc_bioset(GFP_NOWAIT,
 			DIV_ROUND_UP(s->insert_bio_sectors, PAGE_SECTORS),
 			&dc->disk.bio_split);
+#else
+	cache_bio = bio_alloc_bioset(miss->bi_bdev,
+			DIV_ROUND_UP(s->insert_bio_sectors, PAGE_SECTORS),
+			0, GFP_NOWAIT, &dc->disk.bio_split);
+#endif
 	if (!cache_bio)
 		goto out_submit;
 
 	cache_bio->bi_iter.bi_sector	= miss->bi_iter.bi_sector;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_copy_dev(cache_bio, miss);
+#endif
 	cache_bio->bi_iter.bi_size	= s->insert_bio_sectors << 9;
 
 	cache_bio->bi_end_io	= backing_request_endio;
@@ -1033,7 +1062,11 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 		bio_get(s->iop.bio);
 
 		if (bio_op(bio) == REQ_OP_DISCARD &&
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 		    !blk_queue_discard(bdev_get_queue(dc->bdev)))
+#else
+		    !bdev_max_discard_sectors(dc->bdev))
+#endif
 			goto insert_data;
 
 		/* I/O request sent to backing device */
@@ -1051,21 +1084,36 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 			 */
 			struct bio *flush;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 			flush = bio_alloc_bioset(GFP_NOIO, 0,
 						 &dc->disk.bio_split);
+#else
+			flush = bio_alloc_bioset(bio->bi_bdev, 0,
+						 REQ_OP_WRITE | REQ_PREFLUSH,
+						 GFP_NOIO, &dc->disk.bio_split);
+#endif
 			if (!flush) {
 				s->iop.status = BLK_STS_RESOURCE;
 				goto insert_data;
 			}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 			bio_copy_dev(flush, bio);
+#endif
 			flush->bi_end_io = backing_request_endio;
 			flush->bi_private = cl;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 			flush->bi_opf = REQ_OP_WRITE | REQ_PREFLUSH;
+#endif
 			/* I/O request sent to backing device */
 			closure_bio_submit(s->iop.c, flush, cl);
 		}
 	} else {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 		s->iop.bio = bio_clone_fast(bio, GFP_NOIO, &dc->disk.bio_split);
+#else
+		s->iop.bio = bio_alloc_clone(bio->bi_bdev, bio, GFP_NOIO,
+					     &dc->disk.bio_split);
+#endif
 		/* I/O request sent to backing device */
 		bio->bi_end_io = backing_request_endio;
 		closure_bio_submit(s->iop.c, bio, cl);
@@ -1148,6 +1196,12 @@ static void detached_dev_do_request(struct bcache_device *d, struct bio *bio,
 	 * which would call closure_get(&dc->disk.cl)
 	 */
 	ddip = kzalloc(sizeof(struct detached_dev_io_private), GFP_NOIO);
+	if (!ddip) {
+		bio->bi_status = BLK_STS_RESOURCE;
+		bio->bi_end_io(bio);
+		return;
+	}
+
 	ddip->d = d;
 	/* Count on the bcache device */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0)
@@ -1168,7 +1222,11 @@ static void detached_dev_do_request(struct bcache_device *d, struct bio *bio,
 	bio->bi_private = ddip;
 
 	if ((bio_op(bio) == REQ_OP_DISCARD) &&
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 	    !blk_queue_discard(bdev_get_queue(dc->bdev)))
+#else
+	    !bdev_max_discard_sectors(dc->bdev))
+#endif
 		bio->bi_end_io(bio);
 	else
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)

@@ -79,8 +79,13 @@ static void moving_init(struct moving_io *io)
 {
 	struct bio *bio = &io->bio.bio;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	bio_init(bio, bio->bi_inline_vecs,
 		 DIV_ROUND_UP(KEY_SIZE(&io->w->key), PAGE_SECTORS));
+#else
+	bio_init(bio, NULL, bio->bi_inline_vecs,
+		 DIV_ROUND_UP(KEY_SIZE(&io->w->key), PAGE_SECTORS), 0);
+#endif
 	bio_get(bio);
 	bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 

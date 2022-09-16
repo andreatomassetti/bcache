@@ -564,8 +564,13 @@ static inline unsigned int fract_exp_two(unsigned int x,
 void bch_bio_map(struct bio *bio, void *base);
 int bch_bio_alloc_pages(struct bio *bio, gfp_t gfp_mask);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
 static inline sector_t bdev_sectors(struct block_device *bdev)
 {
 	return bdev->bd_inode->i_size >> 9;
 }
+#define BDEV_SECTORS(b) bdev_sectors(b)
+#else
+#define BDEV_SECTORS(b) bdev_nr_sectors(b)
+#endif
 #endif /* _BCACHE_UTIL_H */

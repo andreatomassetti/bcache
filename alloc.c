@@ -336,7 +336,11 @@ static int bch_allocator_thread(void *arg)
 				mutex_unlock(&ca->set->bucket_lock);
 				blkdev_issue_discard(ca->bdev,
 					bucket_to_sector(ca->set, bucket),
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 19, 0)
 					ca->sb.bucket_size, GFP_KERNEL, 0);
+#else
+					ca->sb.bucket_size, GFP_KERNEL);
+#endif
 				mutex_lock(&ca->set->bucket_lock);
 			}
 
