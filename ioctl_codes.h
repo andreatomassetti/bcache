@@ -2,13 +2,15 @@
 #ifndef __BCACHE_IOCTL_CODES_H__
 #define __BCACHE_IOCTL_CODES_H__
 
+#include <linux/blkdev.h>
 #include <linux/ioctl.h>
 #include <linux/types.h>
 
+#include "bcache_ondisk.h"
+
 struct bch_register_device {
-	const char *dev_name;
-	size_t size;
-	struct cache_sb *sb;
+	char dev_name[BDEVNAME_SIZE];
+	struct cache_sb sb;
 };
 
 #define BCH_IOCTL_MAGIC (0xBC)

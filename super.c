@@ -2763,7 +2763,7 @@ static ssize_t register_bcache_sysfs(struct kobject *k, struct kobj_attribute *a
 
 ssize_t register_bcache_ioctl(struct bch_register_device *brd)
 {
-	return register_bcache_common((void *)brd->sb, NULL, brd->dev_name, brd->size);
+	return register_bcache_common((void *)&brd->sb, NULL, &brd->dev_name[0], BDEVNAME_SIZE);
 }
 
 

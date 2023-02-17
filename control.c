@@ -2,7 +2,6 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
-#include <linux/vmalloc.h>
 
 #include "control.h"
 
@@ -19,8 +18,6 @@ static struct bch_ctrl_device _control_device;
 long bch_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 		unsigned long arg)
 {
-	int retval = 0;
-
 	if (_IOC_TYPE(cmd) != BCH_IOCTL_MAGIC)
 		return -EINVAL;
 
@@ -31,23 +28,15 @@ long bch_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 
 	switch (cmd) {
 	case BCH_IOCTL_REGISTER_DEVICE: {
-		struct bch_register_device *cmd_info;
+		struct bch_register_device cmd_info;
 
-		cmd_info = vmalloc(sizeof(struct bch_register_device));
-		if (!cmd_info)
-			return -ENOMEM;
-
-		if (copy_from_user(cmd_info, (void __user *)arg,
+		if (copy_from_user(&cmd_info, (void __user *)arg,
 				sizeof(struct bch_register_device))) {
 			pr_err("Cannot copy cmd info from user space\n");
-			vfree(cmd_info);
 			return -EINVAL;
 		}
 
-		retval = register_bcache_ioctl(cmd_info);
-
-		vfree(cmd_info);
-		return retval;
+		return register_bcache_ioctl(&cmd_info);
 	}
 
 	default:
