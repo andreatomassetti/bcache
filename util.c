@@ -285,3 +285,19 @@ int bch_bio_alloc_pages(struct bio *bio, gfp_t gfp_mask)
 
 	return 0;
 }
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+void *kvrealloc(const void *p, size_t oldsize, size_t newsize, gfp_t flags)
+{
+	void *newp;
+
+	if (oldsize >= newsize)
+		return (void *)p;
+	newp = kvmalloc(newsize, flags);
+	if (!newp)
+		return NULL;
+	memcpy(newp, p, oldsize);
+	kvfree(p);
+	return newp;
+}
+#endif

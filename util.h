@@ -573,4 +573,9 @@ static inline sector_t bdev_sectors(struct block_device *bdev)
 #else
 #define BDEV_SECTORS(b) bdev_nr_sectors(b)
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)
+extern void *kvrealloc(const void *p, size_t oldsize, size_t newsize,
+		gfp_t flags);
+#endif
 #endif /* _BCACHE_UTIL_H */

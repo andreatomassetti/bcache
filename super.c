@@ -2524,6 +2524,87 @@ static bool bch_is_open(dev_t dev)
 	return bch_is_open_cache(dev) || bch_is_open_backing(dev);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+static bool bch_update_capacity(dev_t dev)
+{
+	const size_t max_stripes = min_t(size_t, INT_MAX,
+					 SIZE_MAX / sizeof(atomic_t));
+
+	uint64_t n, n_old, orig_cached_sectors = 0;
+	void *tmp_realloc;
+
+	int nr_stripes_old;
+	bool res = false;
+
+	struct bcache_device *d;
+	struct cache_set *c, *tc;
+	struct cached_dev *dcp, *t, *dc = NULL;
+
+	uint64_t parent_nr_sectors;
+
+	list_for_each_entry_safe(c, tc, &bch_cache_sets, list)
+		list_for_each_entry_safe(dcp, t, &c->cached_devs, list)
+			if (dcp->bdev->bd_dev == dev) {
+				dc = dcp;
+				goto dc_found;
+			}
+
+dc_found:
+	if (!dc)
+		return false;
+
+	parent_nr_sectors = BDEV_SECTORS(dc->bdev) - dc->sb.data_offset;
+
+	if (parent_nr_sectors == BDEV_SECTORS(dc->disk.disk->part0))
+		return false;
+
+	d = &dc->disk;
+	orig_cached_sectors = d->c->cached_dev_sectors;
+
+	/* Force cached device sectors re-calc */
+	calc_cached_dev_sectors(d->c);
+
+	/* Block writeback thread */
+	down_write(&dc->writeback_lock);
+	nr_stripes_old = d->nr_stripes;
+	n = DIV_ROUND_UP_ULL(parent_nr_sectors, d->stripe_size);
+	if (!n || n > max_stripes) {
+		pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
+			n);
+		goto restore_dev_sectors;
+	}
+	d->nr_stripes = n;
+
+	n = d->nr_stripes * sizeof(atomic_t);
+	n_old = nr_stripes_old * sizeof(atomic_t);
+	tmp_realloc = kvrealloc(d->stripe_sectors_dirty, n_old,
+		n, GFP_KERNEL);
+	if (!tmp_realloc)
+		goto restore_nr_stripes;
+
+	d->stripe_sectors_dirty = (atomic_t *) tmp_realloc;
+
+	n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
+	n_old = BITS_TO_LONGS(nr_stripes_old) * sizeof(unsigned long);
+	tmp_realloc = kvrealloc(d->full_dirty_stripes, n_old, n, GFP_KERNEL);
+	if (!tmp_realloc)
+		goto restore_nr_stripes;
+
+	d->full_dirty_stripes = (unsigned long *) tmp_realloc;
+
+	if ((res = set_capacity_and_notify(dc->disk.disk, parent_nr_sectors)))
+		goto unblock_and_exit;
+
+restore_nr_stripes:
+	d->nr_stripes = nr_stripes_old;
+restore_dev_sectors:
+	d->c->cached_dev_sectors = orig_cached_sectors;
+unblock_and_exit:
+	up_write(&dc->writeback_lock);
+	return res;
+}
+#endif
+
 struct async_reg_args {
 	struct delayed_work reg_work;
 	char *path;
@@ -2656,7 +2737,12 @@ static ssize_t register_bcache_common(void *k, struct kobj_attribute *attr,
 			if (lookup_bdev(strim(path), &dev) == 0 &&
 #endif
 			    bch_is_open(dev))
-				err = "device already registered";
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+				if (bch_update_capacity(dev))
+					err = "capacity changed";
+				else
+#endif
+					err = "device already registered";
 			else
 				err = "device busy";
 			mutex_unlock(&bch_register_lock);
@@ -2677,6 +2763,10 @@ static ssize_t register_bcache_common(void *k, struct kobj_attribute *attr,
 	} else {
 		sb_disk =  NULL;
 		memcpy(sb, (struct cache_sb *)k, sizeof(struct cache_sb));
+		if (sb->data_offset != 0) {
+			pr_warn("data_offset must be 0 when using IOCTL registration!");
+			sb->data_offset = 0;
+		}
 	}
 
 	err = "failed to register device";
@@ -3048,3 +3138,4 @@ MODULE_PARM_DESC(bch_cutoff_writeback_sync, "hard threshold to cutoff writeback"
 MODULE_DESCRIPTION("Bcache: a Linux block layer cache");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.4");
