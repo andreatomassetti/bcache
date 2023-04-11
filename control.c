@@ -28,15 +28,23 @@ long bch_service_ioctl_ctrl(struct file *filp, unsigned int cmd,
 
 	switch (cmd) {
 	case BCH_IOCTL_REGISTER_DEVICE: {
-		struct bch_register_device cmd_info;
+		long res = -EINVAL;
+		struct bch_register_device *cmd_info;
 
-		if (copy_from_user(&cmd_info, (void __user *)arg,
+		cmd_info = (struct bch_register_device *) kzalloc(sizeof(struct bch_register_device), GFP_KERNEL);
+		if (IS_ERR_OR_NULL(cmd_info))
+			return PTR_ERR(cmd_info);
+
+		if (copy_from_user(cmd_info, (void __user *)arg,
 				sizeof(struct bch_register_device))) {
 			pr_err("Cannot copy cmd info from user space\n");
-			return -EINVAL;
+		} else {
+			res = register_bcache_ioctl(cmd_info);
 		}
 
-		return register_bcache_ioctl(&cmd_info);
+		kfree(cmd_info);
+
+		return res;
 	}
 
 	default:
