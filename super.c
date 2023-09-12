@@ -2738,8 +2738,10 @@ static ssize_t register_bcache_common(void *k, struct kobj_attribute *attr,
 #endif
 			    bch_is_open(dev))
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-				if (bch_update_capacity(dev))
+				if (bch_update_capacity(dev)) {
 					err = "capacity changed";
+					ret = size;
+				}
 				else
 #endif
 					err = "device already registered";
@@ -3138,4 +3140,4 @@ MODULE_PARM_DESC(bch_cutoff_writeback_sync, "hard threshold to cutoff writeback"
 MODULE_DESCRIPTION("Bcache: a Linux block layer cache");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.4");
+MODULE_VERSION("0.5.0");
