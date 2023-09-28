@@ -890,6 +890,7 @@ static inline int idx_to_first_minor(int idx)
 static void bcache_device_free(struct bcache_device *d)
 {
 	struct gendisk *disk = d->disk;
+	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
 
 	lockdep_assert_held(&bch_register_lock);
 
@@ -926,8 +927,10 @@ static void bcache_device_free(struct bcache_device *d)
 	}
 
 	bioset_exit(&d->bio_split);
-	kvfree(d->full_dirty_stripes);
-	kvfree(d->stripe_sectors_dirty);
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
+		kvfree(d->full_dirty_stripes);
+		kvfree(d->stripe_sectors_dirty);
+	}
 
 	closure_debug_destroy(&d->cl);
 }
@@ -937,6 +940,7 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 		const struct block_device_operations *ops)
 {
 	struct request_queue *q;
+	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
 	const size_t max_stripes = min_t(size_t, INT_MAX,
 					 SIZE_MAX / sizeof(atomic_t));
 	uint64_t n;
@@ -945,23 +949,25 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 	if (!d->stripe_size)
 		d->stripe_size = 1 << 31;
 
-	n = DIV_ROUND_UP_ULL(sectors, d->stripe_size);
-	if (!n || n > max_stripes) {
-		pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
-			n);
-		return -ENOMEM;
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
+		n = DIV_ROUND_UP_ULL(sectors, d->stripe_size);
+		if (!n || n > max_stripes) {
+			pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
+				n);
+			return -ENOMEM;
+		}
+		d->nr_stripes = n;
+
+		n = d->nr_stripes * sizeof(atomic_t);
+		d->stripe_sectors_dirty = kvzalloc(n, GFP_KERNEL);
+		if (!d->stripe_sectors_dirty)
+			return -ENOMEM;
+
+		n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
+		d->full_dirty_stripes = kvzalloc(n, GFP_KERNEL);
+		if (!d->full_dirty_stripes)
+			goto out_free_stripe_sectors_dirty;
 	}
-	d->nr_stripes = n;
-
-	n = d->nr_stripes * sizeof(atomic_t);
-	d->stripe_sectors_dirty = kvzalloc(n, GFP_KERNEL);
-	if (!d->stripe_sectors_dirty)
-		return -ENOMEM;
-
-	n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
-	d->full_dirty_stripes = kvzalloc(n, GFP_KERNEL);
-	if (!d->full_dirty_stripes)
-		goto out_free_stripe_sectors_dirty;
 
 	idx = ida_simple_get(&bcache_device_idx, 0,
 				BCACHE_DEVICE_IDX_MAX, GFP_KERNEL);
@@ -1037,9 +1043,11 @@ out_bioset_exit:
 out_ida_remove:
 	ida_simple_remove(&bcache_device_idx, idx);
 out_free_full_dirty_stripes:
-	kvfree(d->full_dirty_stripes);
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK)
+		kvfree(d->full_dirty_stripes);
 out_free_stripe_sectors_dirty:
-	kvfree(d->stripe_sectors_dirty);
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK)
+		kvfree(d->stripe_sectors_dirty);
 	return -ENOMEM;
 
 }
@@ -2564,33 +2572,36 @@ dc_found:
 	/* Force cached device sectors re-calc */
 	calc_cached_dev_sectors(d->c);
 
-	/* Block writeback thread */
-	down_write(&dc->writeback_lock);
-	nr_stripes_old = d->nr_stripes;
-	n = DIV_ROUND_UP_ULL(parent_nr_sectors, d->stripe_size);
-	if (!n || n > max_stripes) {
-		pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
-			n);
-		goto restore_dev_sectors;
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
+		/* Block writeback thread */
+		down_write(&dc->writeback_lock);
+		nr_stripes_old = d->nr_stripes;
+		n = DIV_ROUND_UP_ULL(parent_nr_sectors, d->stripe_size);
+		if (!n || n > max_stripes) {
+			pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
+				n);
+			goto restore_dev_sectors;
+		}
+		d->nr_stripes = n;
+
+		n = d->nr_stripes * sizeof(atomic_t);
+		n_old = nr_stripes_old * sizeof(atomic_t);
+		tmp_realloc = kvrealloc(d->stripe_sectors_dirty, n_old,
+			n, GFP_KERNEL);
+		if (!tmp_realloc)
+			goto restore_nr_stripes;
+
+		d->stripe_sectors_dirty = (atomic_t *) tmp_realloc;
+
+		n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
+		n_old = BITS_TO_LONGS(nr_stripes_old) * sizeof(unsigned long);
+		tmp_realloc = kvrealloc(d->full_dirty_stripes, n_old, n, GFP_KERNEL);
+		if (!tmp_realloc)
+			goto restore_nr_stripes;
+
+		d->full_dirty_stripes = (unsigned long *) tmp_realloc;
 	}
-	d->nr_stripes = n;
 
-	n = d->nr_stripes * sizeof(atomic_t);
-	n_old = nr_stripes_old * sizeof(atomic_t);
-	tmp_realloc = kvrealloc(d->stripe_sectors_dirty, n_old,
-		n, GFP_KERNEL);
-	if (!tmp_realloc)
-		goto restore_nr_stripes;
-
-	d->stripe_sectors_dirty = (atomic_t *) tmp_realloc;
-
-	n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
-	n_old = BITS_TO_LONGS(nr_stripes_old) * sizeof(unsigned long);
-	tmp_realloc = kvrealloc(d->full_dirty_stripes, n_old, n, GFP_KERNEL);
-	if (!tmp_realloc)
-		goto restore_nr_stripes;
-
-	d->full_dirty_stripes = (unsigned long *) tmp_realloc;
 
 	if ((res = set_capacity_and_notify(dc->disk.disk, parent_nr_sectors)))
 		goto unblock_and_exit;
@@ -2600,7 +2611,8 @@ restore_nr_stripes:
 restore_dev_sectors:
 	d->c->cached_dev_sectors = orig_cached_sectors;
 unblock_and_exit:
-	up_write(&dc->writeback_lock);
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK)
+		up_write(&dc->writeback_lock);
 	return res;
 }
 #endif
@@ -3140,4 +3152,4 @@ MODULE_PARM_DESC(bch_cutoff_writeback_sync, "hard threshold to cutoff writeback"
 MODULE_DESCRIPTION("Bcache: a Linux block layer cache");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.5.0");
+MODULE_VERSION("0.6.0");
