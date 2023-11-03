@@ -109,7 +109,7 @@ rw_attribute(congested_write_threshold_us);
 
 rw_attribute(sequential_cutoff);
 rw_attribute(data_csum);
-read_attribute(cache_mode);
+rw_attribute(cache_mode);
 rw_attribute(readahead_cache_policy);
 rw_attribute(stop_when_cache_set_failed);
 rw_attribute(writeback_metadata);
