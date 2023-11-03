@@ -949,15 +949,15 @@ static int bcache_device_init(struct bcache_device *d, unsigned int block_size,
 	if (!d->stripe_size)
 		d->stripe_size = 1 << 31;
 
-	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
-		n = DIV_ROUND_UP_ULL(sectors, d->stripe_size);
-		if (!n || n > max_stripes) {
-			pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
-				n);
-			return -ENOMEM;
-		}
-		d->nr_stripes = n;
+	n = DIV_ROUND_UP_ULL(sectors, d->stripe_size);
+	if (!n || n > max_stripes) {
+		pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
+			n);
+		return -ENOMEM;
+	}
+	d->nr_stripes = n;
 
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
 		n = d->nr_stripes * sizeof(atomic_t);
 		d->stripe_sectors_dirty = kvzalloc(n, GFP_KERNEL);
 		if (!d->stripe_sectors_dirty)
@@ -2572,18 +2572,18 @@ dc_found:
 	/* Force cached device sectors re-calc */
 	calc_cached_dev_sectors(d->c);
 
-	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
-		/* Block writeback thread */
-		down_write(&dc->writeback_lock);
-		nr_stripes_old = d->nr_stripes;
-		n = DIV_ROUND_UP_ULL(parent_nr_sectors, d->stripe_size);
-		if (!n || n > max_stripes) {
-			pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
-				n);
-			goto restore_dev_sectors;
-		}
-		d->nr_stripes = n;
+	/* Block writeback thread */
+	down_write(&dc->writeback_lock);
+	nr_stripes_old = d->nr_stripes;
+	n = DIV_ROUND_UP_ULL(parent_nr_sectors, d->stripe_size);
+	if (!n || n > max_stripes) {
+		pr_err("nr_stripes too large or invalid: %llu (start sector beyond end of disk?)\n",
+			n);
+		goto restore_dev_sectors;
+	}
+	d->nr_stripes = n;
 
+	if (BDEV_CACHE_MODE(&dc->sb) == CACHE_MODE_WRITEBACK) {
 		n = d->nr_stripes * sizeof(atomic_t);
 		n_old = nr_stripes_old * sizeof(atomic_t);
 		tmp_realloc = kvrealloc(d->stripe_sectors_dirty, n_old,
@@ -3152,4 +3152,4 @@ MODULE_PARM_DESC(bch_cutoff_writeback_sync, "hard threshold to cutoff writeback"
 MODULE_DESCRIPTION("Bcache: a Linux block layer cache");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.6.0");
+MODULE_VERSION("0.6.1");
