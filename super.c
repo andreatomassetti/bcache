@@ -3142,4 +3142,4 @@ MODULE_PARM_DESC(bch_cutoff_writeback_sync, "hard threshold to cutoff writeback"
 MODULE_DESCRIPTION("Bcache: a Linux block layer cache");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.6.1");
+MODULE_VERSION("0.6.2");

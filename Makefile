@@ -7,8 +7,8 @@ bcache-y := alloc.o bset.o btree.o closure.o debug.o extents.o\
 	io.o journal.o movinggc.o request.o stats.o super.o sysfs.o trace.o\
 	util.o writeback.o features.o control.o
 
-KVERSION = $(shell uname -r)
-MODULES_DIR = /lib/modules/$(KVERSION)
+KERNEL_VERSION ?= $(shell uname -r)
+MODULES_DIR = /lib/modules/$(KERNEL_VERSION)
 BCACHE_MODULE_PATH = $(MODULES_DIR)/kernel/drivers/md/bcache
 
 PWD=$(shell pwd)
